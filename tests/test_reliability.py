@@ -350,3 +350,25 @@ def test_retry_policy_rejects_invalid_configuration():
         topic_settings(retry_delays_seconds=(-1.0,)).validate_retries()
     with pytest.raises(ValueError, match="must be inline or topics"):
         KafkaSettings(retry_mode="unknown").validate_retries()
+
+
+def test_legacy_dlq_record_from_v01_is_replayable_on_its_source():
+    # Old v0.1 DLQ events had no original_topic/original_event_id fields.
+    event = build_event("order.created", {"order_id": 1})
+    raw = json.dumps(event).encode("utf-8")
+    payload = {
+        "source_topic": "inhouse.events.v1",
+        "source_partition": 0,
+        "source_offset": 2,
+        "original_value_b64": base64.b64encode(raw).decode("ascii"),
+        "original_key_b64": base64.b64encode(b"").decode("ascii"),
+        "error_type": "ValueError",
+    }
+    record = Msg(build_event("integration.delivery_failed", payload),
+                 topic="inhouse.events.v1.dlq")
+    publisher = FakePublisher()
+    replay = DLQReplayer(KafkaSettings(), publisher=publisher)
+    preview = replay.inspect(record)
+    assert preview["replayable"]
+    replay.replay(record, execute=True, confirm_dlq_id=preview["dlq_event_id"])
+    assert publisher.raw[0][1] == raw
