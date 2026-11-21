@@ -12,6 +12,8 @@ jobs:
   unit-and-broker:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      KAFKA_BOOTSTRAP_SERVERS: "127.0.0.1:9092"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -34,6 +36,11 @@ jobs:
           KAFKA_INTEGRATION_TEST: "1"
           KAFKA_POSTGRES_DSN: "postgresql://kafka:local-dev-only@localhost:5432/kafka"
         run: pytest -m integration -q
+      - name: Dump broker diagnostics on failure
+        if: failure()
+        run: |
+          docker compose --profile inbox ps
+          docker compose --profile inbox logs --tail=150 kafka
       - name: Stop local services
         if: always()
         run: docker compose --profile inbox down -v
