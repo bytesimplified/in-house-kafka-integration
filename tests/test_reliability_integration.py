@@ -106,12 +106,14 @@ def test_dlq_then_manually_replay_same_event_id():
                 found = candidate
         assert found is not None, "Event was not routed to DLQ"
         replayer = DLQReplayer(settings)
-        preview = replayer.inspect(found)
+        # Exercise the CLI fetch path, not only a separately subscribed consumer.
+        fetched = replayer.fetch(found.partition(), found.offset(), timeout_seconds=15)
+        preview = replayer.inspect(fetched)
         assert preview["replayable"]
         assert preview["original_event_id"] == published_id
-        assert replayer.replay(found)["status"] == "dry-run"
+        assert replayer.replay(fetched)["status"] == "dry-run"
         state["allow"] = True
-        result = replayer.replay(found, execute=True, confirm_dlq_id=preview["dlq_event_id"])
+        result = replayer.replay(fetched, execute=True, confirm_dlq_id=preview["dlq_event_id"])
         assert result["status"] == "published"
 
         deadline = time.monotonic() + 45
