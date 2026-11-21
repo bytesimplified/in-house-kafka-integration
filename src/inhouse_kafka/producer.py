@@ -1,8 +1,8 @@
-"""Synchronous, acknowledged Kafka publishing with idempotent producer semantics."""
+"""Acknowledged publishing; raw forwarding keeps the original event_id intact."""
 from __future__ import annotations
 
 import json
-from typing import Any, Callable
+from typing import Any
 
 from confluent_kafka import Producer
 
@@ -15,6 +15,39 @@ class EventPublisher:
         self.settings = settings
         self._producer = producer if producer is not None else Producer(settings.producer_config())
 
+    def publish_raw(
+        self,
+        topic: str,
+        value: bytes,
+        *,
+        key: bytes | None = None,
+        headers: list[tuple[str, bytes]] | None = None,
+    ) -> None:
+        """Require broker acknowledgement before callers commit a consumed offset.
+
+        Publishing and consuming are NOT in one Kafka transaction. On an
+        ambiguous timeout or crash between acknowledgement and source commit,
+        the forwarded record may be duplicated. Consumers require deduplication.
+        """
+        failures: list[str] = []
+        delivered: list[bool] = []
+
+        def on_delivery(error: Any, message: Any) -> None:
+            if error is not None:
+                failures.append(str(error))
+            else:
+                delivered.append(True)
+
+        kwargs: dict[str, Any] = {"topic": topic, "key": key, "value": value, "on_delivery": on_delivery}
+        if headers is not None:
+            kwargs["headers"] = headers
+        self._producer.produce(**kwargs)
+        remaining = self._producer.flush(self.settings.delivery_timeout_seconds)
+        if remaining or failures or not delivered:
+            raise RuntimeError(
+                "Kafka delivery not confirmed" + (": " + "; ".join(failures) if failures else "")
+            )
+
     def publish(
         self,
         event_type: str,
@@ -24,32 +57,10 @@ class EventPublisher:
         correlation_id: str | None = None,
         topic: str | None = None,
     ) -> str:
-        """Publish and wait for broker delivery confirmation; raise on failure.
-
-        Events may be delivered twice if callers retry following an ambiguous timeout.
-        Consumers should deduplicate by event_id for exactly-once business effects.
-        """
         event = build_event(event_type, payload, correlation_id=correlation_id)
-        encoded = json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        delivery_errors: list[str] = []
-        delivered: list[bool] = []
-
-        def on_delivery(error: Any, message: Any) -> None:
-            if error is not None:
-                delivery_errors.append(str(error))
-            else:
-                delivered.append(True)
-
-        self._producer.produce(
-            topic=topic or self.settings.topic,
+        self.publish_raw(
+            topic or self.settings.topic,
+            json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
             key=key.encode("utf-8") if key is not None else None,
-            value=encoded,
-            on_delivery=on_delivery,
         )
-        remaining = self._producer.flush(self.settings.delivery_timeout_seconds)
-        if remaining != 0 or delivery_errors or not delivered:
-            raise RuntimeError(
-                "Kafka delivery not confirmed"
-                + (": " + "; ".join(delivery_errors) if delivery_errors else "")
-            )
         return event["event_id"]
