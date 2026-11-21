@@ -47,7 +47,7 @@ class DLQReplayer:
             payload = envelope["payload"]
             if not isinstance(payload, dict):
                 raise ValueError("Invalid DLQ payload")
-            destination = payload["original_topic"]
+            destination = payload.get("original_topic", payload.get("source_topic"))
             if destination != self.settings.topic:
                 raise ValueError("DLQ original topic is not the configured source topic")
             raw = base64.b64decode(payload["original_value_b64"], validate=True)
@@ -80,6 +80,7 @@ class DLQReplayer:
                 and isinstance(original.get("event_id"), str)
                 and bool(original["event_id"])
                 and isinstance(original.get("event_type"), str)
+                and bool(original["event_type"])
                 and isinstance(original.get("payload"), dict)
                 and (original_id is None or original_id == original["event_id"])
             )
