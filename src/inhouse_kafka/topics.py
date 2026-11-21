@@ -1,4 +1,4 @@
-"""Explicit topic provisioning; application startup does not auto-create topics."""
+"""Explicit topic provisioning; never rely on Kafka auto-creation."""
 from __future__ import annotations
 
 from typing import Any
@@ -10,21 +10,18 @@ from .settings import KafkaSettings
 
 
 def ensure_topics(settings: KafkaSettings, *, admin: Any = None) -> list[str]:
+    settings.validate_retries()
     if settings.partitions < 1 or settings.replication_factor < 1:
         raise ValueError("Topic partitions and replication factor must be positive")
-    if settings.topic == settings.dlq_topic:
-        raise ValueError("Event topic and DLQ topic must differ")
     client = admin if admin is not None else AdminClient(settings.connection_config())
     topic_names = [settings.topic, settings.dlq_topic]
-    topic_specs = [
-        NewTopic(
-            name,
-            num_partitions=settings.partitions,
-            replication_factor=settings.replication_factor,
-        )
+    if settings.retry_mode == "topics":
+        topic_names.extend(settings.retry_topics)
+    specs = [
+        NewTopic(name, num_partitions=settings.partitions, replication_factor=settings.replication_factor)
         for name in topic_names
     ]
-    results = client.create_topics(topic_specs, request_timeout=15)
+    results = client.create_topics(specs, request_timeout=15)
     created = []
     for name in topic_names:
         try:
