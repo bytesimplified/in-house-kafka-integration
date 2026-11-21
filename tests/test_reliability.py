@@ -348,5 +348,5 @@ def test_topic_creation_includes_all_retry_stages():
 def test_retry_policy_rejects_invalid_configuration():
     with pytest.raises(ValueError, match="positive"):
         topic_settings(retry_delays_seconds=(-1.0,)).validate_retries()
-    with pytest.raises(ValueError, match="retry"):
+    with pytest.raises(ValueError, match="must be inline or topics"):
         KafkaSettings(retry_mode="unknown").validate_retries()
